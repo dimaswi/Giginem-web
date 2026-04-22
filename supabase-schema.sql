@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS queues (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   doctor_id UUID NOT NULL REFERENCES doctors(id) ON DELETE CASCADE,
   polyclinic_id UUID NOT NULL REFERENCES polyclinics(id) ON DELETE CASCADE,
+  schedule_id UUID REFERENCES doctor_schedules(id) ON DELETE SET NULL,
   service_id UUID REFERENCES services(id) ON DELETE SET NULL,
   patient_name TEXT NOT NULL,
   patient_phone TEXT NOT NULL,

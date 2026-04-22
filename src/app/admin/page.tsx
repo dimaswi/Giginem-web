@@ -63,6 +63,7 @@ interface Queue {
   created_at: string;
   called_at: string | null;
   doctors: { name: string; specialization: string } | null;
+  doctor_schedules: { start_time: string; end_time: string } | null;
   polyclinics: { name: string } | null;
   services: { name: string; duration: number } | null;
 }
@@ -93,7 +94,7 @@ export default function AdminQueuePage() {
 
     let query = supabase
       .from("queues")
-      .select(`*, doctors(name, specialization), polyclinics(name), services(name, duration)`)
+      .select(`*, doctors(name, specialization), doctor_schedules(start_time, end_time), polyclinics(name), services(name, duration)`)
       .eq("queue_date", selectedDate)
       .order("queue_number", { ascending: true });
 
@@ -125,13 +126,15 @@ export default function AdminQueuePage() {
       const qToCancel = queues.find((q) => q.id === id);
       if (qToCancel) {
         // Fetch from DB to be safe
-        const { data: dbQueue } = await (supabase.from("queues") as any).select("doctor_id, queue_date, queue_number").eq("id", id).single();
+        const { data: dbQueue } = await (supabase.from("queues") as any).select("doctor_id, schedule_id, queue_date, queue_number").eq("id", id).single();
         if (dbQueue) {
-           const { data: subs } = await (supabase.from("queues") as any)
+           let subQuery = (supabase.from("queues") as any)
              .select("id, queue_number")
              .eq("doctor_id", dbQueue.doctor_id)
              .eq("queue_date", dbQueue.queue_date)
              .gt("queue_number", dbQueue.queue_number);
+           if (dbQueue.schedule_id) subQuery = subQuery.eq("schedule_id", dbQueue.schedule_id);
+           const { data: subs } = await subQuery;
            if (subs) {
              await Promise.all((subs as any[]).map(s => 
                (supabase.from("queues") as any).update({ queue_number: s.queue_number - 1 }).eq("id", s.id)
@@ -310,6 +313,12 @@ export default function AdminQueuePage() {
                           <span className="truncate">{queue.doctors?.name}</span>
                           <span className="opacity-40">·</span>
                           <span className="truncate">{queue.polyclinics?.name}</span>
+                          {queue.doctor_schedules && (
+                            <>
+                              <span className="opacity-40">·</span>
+                              <span className="truncate text-primary font-medium">{queue.doctor_schedules.start_time.slice(0, 5)} - {queue.doctor_schedules.end_time.slice(0, 5)}</span>
+                            </>
+                          )}
                         </div>
                       </div>
 

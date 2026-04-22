@@ -97,6 +97,7 @@ export interface Database {
         Row: {
           id: string;
           doctor_id: string;
+          schedule_id: string | null;
           polyclinic_id: string;
           service_id: string | null;
           patient_name: string;
@@ -113,6 +114,7 @@ export interface Database {
         Insert: {
           id?: string;
           doctor_id: string;
+          schedule_id?: string | null;
           polyclinic_id: string;
           service_id?: string | null;
           patient_name: string;
@@ -129,6 +131,7 @@ export interface Database {
         Update: {
           id?: string;
           doctor_id?: string;
+          schedule_id?: string | null;
           polyclinic_id?: string;
           service_id?: string | null;
           patient_name?: string;

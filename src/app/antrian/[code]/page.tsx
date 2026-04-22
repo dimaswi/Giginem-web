@@ -28,16 +28,20 @@ export default async function QueueStatusPage({ params }: PageProps) {
   const supabase = await createServerSupabaseClient();
 
   const { data: queue } = await supabase.from("queues")
-    .select(`*, doctors(name, specialization), polyclinics(name), services(name, duration)`)
+    .select(`*, doctors(name, specialization), doctor_schedules(start_time, end_time), polyclinics(name), services(name, duration)`)
     .eq("unique_code", code).single();
 
   if (!queue) return notFound();
 
   // Get all people ahead who are NOT done or cancelled
-  const { data: aheadQueues } = await supabase.from("queues")
+  let aheadQuery = supabase.from("queues")
     .select("service_id, services(duration)")
     .eq("doctor_id", queue.doctor_id)
-    .eq("queue_date", queue.queue_date)
+    .eq("queue_date", queue.queue_date);
+  
+  if (queue.schedule_id) aheadQuery = aheadQuery.eq("schedule_id", queue.schedule_id);
+
+  const { data: aheadQueues } = await aheadQuery
     .in("status", ["waiting", "called", "in_progress"])
     .lt("queue_number", queue.queue_number);
 
@@ -106,8 +110,9 @@ export default async function QueueStatusPage({ params }: PageProps) {
                 { label: "Tindakan", value: (queue as any).services?.name || "Konsultasi" },
                 { label: "Dokter", value: (queue as any).doctors?.name },
                 { label: "Poli", value: (queue as any).polyclinics?.name },
+                { label: "Jam Praktek", value: (queue as any).doctor_schedules ? `${(queue as any).doctor_schedules.start_time.slice(0, 5)} - ${(queue as any).doctor_schedules.end_time.slice(0, 5)} WIB` : "-" },
                 { label: "Estimasi Dilayani", value: queue.status === "waiting" ? formattedEstTime : "Sedang/Sudah Dilayani", bold: true },
-                { label: "Tanggal", value: new Date(queue.queue_date).toLocaleDateString("id-ID", { weekday: "long", year: "numeric", month: "long", day: "numeric" }) },
+                { label: "Tanggal", value: new Date(queue.queue_date + "T00:00:00+07:00").toLocaleDateString("id-ID", { weekday: "long", year: "numeric", month: "long", day: "numeric" }) },
               ].map(({ label, value, bold }) => (
                 <div key={label} className="flex justify-between gap-2">
                   <span className="text-muted-foreground shrink-0">{label}</span>

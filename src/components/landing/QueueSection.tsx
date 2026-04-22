@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
-import { CheckCircle2, ChevronRight, Loader2, QrCode, Copy, MapPin, User, Stethoscope, ArrowLeft, Clock } from "lucide-react";
+import { CheckCircle2, ChevronRight, Loader2, QrCode, Copy, MapPin, User, Stethoscope, ArrowLeft, Clock, AlertTriangle } from "lucide-react";
 import QRCode from "react-qr-code";
 import { cn, getWIBDateString, getWIBDay } from "@/lib/utils";
 
@@ -40,7 +40,7 @@ export default function QueueSection() {
   const [services, setServices] = useState<Service[]>([]);
   const [selectedPoli, setSelectedPoli] = useState<Polyclinic | null>(null);
   const [selectedDoctor, setSelectedDoctor] = useState<Doctor | null>(null);
-  const [selectedDate, setSelectedDate] = useState<{ day: number; date: string } | null>(null);
+  const [selectedDate, setSelectedDate] = useState<{ day: number; date: string; schedule_id: string; start_time: string; end_time: string } | null>(null);
   const [selectedService, setSelectedService] = useState<Service | null>(null);
   const [filteredDoctors, setFilteredDoctors] = useState<Doctor[]>([]);
   const [form, setForm] = useState({ name: "", phone: "", complaint: "" });
@@ -50,6 +50,8 @@ export default function QueueSection() {
   const [dataLoading, setDataLoading] = useState(true);
   const [captcha, setCaptcha] = useState({ num1: 0, num2: 0, answer: "" });
   const [captchaInput, setCaptchaInput] = useState("");
+  const [scheduleCapacities, setScheduleCapacities] = useState<Record<string, { usedMinutes: number; totalMinutes: number; queueCount: number }>>({});
+  const [capacityLoading, setCapacityLoading] = useState(false);
 
   const generateCaptcha = () => {
     const num1 = Math.floor(Math.random() * 10) + 1;
@@ -57,6 +59,8 @@ export default function QueueSection() {
     setCaptcha({ num1, num2, answer: (num1 + num2).toString() });
     setCaptchaInput("");
   };
+
+  function timeToMinutes(t: string) { const p = t.split(":"); return parseInt(p[0]) * 60 + parseInt(p[1]); }
 
   useEffect(() => { loadData(); }, []);
 
@@ -68,7 +72,7 @@ export default function QueueSection() {
     setDataLoading(true);
     const [poliRes, docRes, srvRes] = await Promise.all([
       supabase.from("polyclinics").select("*").order("name"),
-      supabase.from("doctors").select("*, doctor_schedules(day_of_week, start_time, end_time, is_active)").eq("is_active", true),
+      supabase.from("doctors").select("*, doctor_schedules(id, day_of_week, start_time, end_time, max_patients, is_active)").eq("is_active", true),
       supabase.from("services").select("*").eq("is_active", true).order("name"),
     ]);
     if (poliRes.data) setPolyclinics(poliRes.data);
@@ -83,6 +87,46 @@ export default function QueueSection() {
     setSelectedDoctor(null);
     setSelectedDate(null);
     setStep(1);
+  }
+
+  async function loadScheduleCapacities(doctor: Doctor) {
+    if (!doctor.doctor_schedules) return;
+    setCapacityLoading(true);
+    const caps: Record<string, { usedMinutes: number; totalMinutes: number; queueCount: number }> = {};
+    const activeScheds = doctor.doctor_schedules.filter(s => s.is_active);
+    await Promise.all(activeScheds.map(async (sched) => {
+      const dateStr = getNextDateForDay(sched.day_of_week);
+      const totalMin = timeToMinutes(sched.end_time) - timeToMinutes(sched.start_time);
+      const { data: queues } = await supabase.from("queues")
+        .select("services(duration)")
+        .eq("schedule_id", sched.id).eq("queue_date", dateStr).neq("status", "cancelled");
+      const usedMin = queues ? (queues as any[]).reduce((a: number, q: any) => a + (q.services?.duration || 0), 0) : 0;
+      caps[`${sched.id}_${dateStr}`] = { usedMinutes: usedMin, totalMinutes: totalMin, queueCount: queues?.length ?? 0 };
+    }));
+    setScheduleCapacities(caps);
+    setCapacityLoading(false);
+  }
+
+  function handleSelectSchedule(sched: Doctor["doctor_schedules"] extends (infer T)[] | undefined ? NonNullable<T> : never, dateString: string) {
+    const capKey = `${sched.id}_${dateString}`;
+    const cap = scheduleCapacities[capKey];
+    const totalMin = timeToMinutes(sched.end_time) - timeToMinutes(sched.start_time);
+    const isFull = cap && cap.usedMinutes >= totalMin;
+
+    if (isFull) {
+      // Find next week's date
+      const nextDate = new Date(dateString + "T00:00:00+07:00");
+      nextDate.setDate(nextDate.getDate() + 7);
+      const nextDateStr = getWIBDateString(nextDate);
+      toast.info("Antrian Penuh", {
+        description: `Jadwal ini sudah penuh. Anda didaftarkan untuk ${new Date(nextDateStr + "T00:00:00+07:00").toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long" })}.`,
+        duration: 5000,
+      });
+      setSelectedDate({ day: sched.day_of_week, date: nextDateStr, schedule_id: sched.id, start_time: sched.start_time, end_time: sched.end_time });
+    } else {
+      setSelectedDate({ day: sched.day_of_week, date: dateString, schedule_id: sched.id, start_time: sched.start_time, end_time: sched.end_time });
+    }
+    setStep(3);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -107,8 +151,30 @@ export default function QueueSection() {
     }
     setLoading(true);
     try {
-      const queueDate = selectedDate.date;
+      let queueDate = selectedDate.date;
       
+      // 0. Capacity check: ensure the schedule is not full
+      const schedTotalMin = timeToMinutes(selectedDate.end_time) - timeToMinutes(selectedDate.start_time);
+      const serviceDuration = selectedService?.duration || 15;
+      const { data: capQueues } = await supabase.from("queues")
+        .select("services(duration)")
+        .eq("schedule_id", selectedDate.schedule_id).eq("queue_date", queueDate).neq("status", "cancelled");
+      const usedMin = capQueues ? (capQueues as any[]).reduce((a: number, q: any) => a + (q.services?.duration || 0), 0) : 0;
+      
+      if (usedMin + serviceDuration > schedTotalMin) {
+        // Auto-redirect to next week
+        const nextDate = new Date(queueDate + "T00:00:00+07:00");
+        nextDate.setDate(nextDate.getDate() + 7);
+        const nextDateStr = getWIBDateString(nextDate);
+        const dayLabel = new Date(nextDateStr + "T00:00:00+07:00").toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long" });
+        toast.warning("Antrian Hari Ini Penuh!", {
+          description: `Estimasi layanan melebihi jam tutup praktek. Anda akan didaftarkan untuk ${dayLabel}.`,
+          duration: 6000,
+        });
+        queueDate = nextDateStr;
+        setSelectedDate({ ...selectedDate, date: nextDateStr });
+      }
+
       // 1. Normalize Input Data for Strict Comparison
       const cleanName = form.name.trim().toLowerCase().replace(/\s+/g, ' ');
       const cleanPhone = form.phone.replace(/\D/g, "").replace(/^0|^62/, ""); // Get core digits
@@ -119,6 +185,7 @@ export default function QueueSection() {
         .select("patient_name, patient_phone, status, unique_code")
         .eq("doctor_id", selectedDoctor.id)
         .eq("queue_date", queueDate)
+        .eq("schedule_id", selectedDate.schedule_id)
         .in("status", ["waiting", "called", "in_progress"]);
 
       if (fetchError) console.error("Fetch Error:", fetchError);
@@ -142,7 +209,8 @@ export default function QueueSection() {
       const { data: allQueuesToday, error: qError } = await supabase.from("queues")
         .select("id")
         .eq("doctor_id", selectedDoctor.id)
-        .eq("queue_date", queueDate);
+        .eq("queue_date", queueDate)
+        .eq("schedule_id", selectedDate.schedule_id);
 
       if (qError) {
         console.error("Supabase Query Error:", qError);
@@ -154,6 +222,7 @@ export default function QueueSection() {
         .select("services(duration)")
         .eq("doctor_id", selectedDoctor.id)
         .eq("queue_date", queueDate)
+        .eq("schedule_id", selectedDate.schedule_id)
         .in("status", ["waiting", "called", "in_progress"]);
 
       const nextNumber = (allQueuesToday?.length ?? 0) + 1;
@@ -174,6 +243,7 @@ export default function QueueSection() {
       
       const { data, error: insertError } = await (supabase.from("queues") as any).insert({
         doctor_id: selectedDoctor.id, 
+        schedule_id: selectedDate.schedule_id,
         polyclinic_id: selectedPoli.id,
         service_id: selectedService?.id || null,
         patient_name: cleanName, 
@@ -346,7 +416,7 @@ export default function QueueSection() {
                         {filteredDoctors.map((doctor) => {
                           const todaySchedule = doctor.doctor_schedules?.find((s) => s.day_of_week === todayDay && s.is_active);
                           return (
-                            <button key={doctor.id} onClick={() => { setSelectedDoctor(doctor); setStep(2); }}
+                            <button key={doctor.id} onClick={() => { setSelectedDoctor(doctor); loadScheduleCapacities(doctor); setStep(2); }}
                               className="group w-full text-left p-4 sm:p-5 rounded-2xl border-2 border-border/60 bg-white hover:border-primary hover:shadow-md hover:shadow-primary/5 active:scale-[0.99] transition-all flex items-center gap-4">
                               <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-gradient-to-br from-primary/20 to-blue-500/10 flex items-center justify-center shrink-0 border border-primary/10">
                                 <span className="font-bold text-primary text-lg sm:text-xl">
@@ -398,35 +468,61 @@ export default function QueueSection() {
                         <Clock className="w-10 h-10 opacity-20" />
                         <p className="text-sm font-medium text-center">Jadwal dokter belum tersedia.</p>
                       </div>
+                    ) : capacityLoading ? (
+                      <div className="flex flex-col items-center justify-center py-16 gap-4 text-primary">
+                        <Loader2 className="w-8 h-8 animate-spin" />
+                        <p className="text-sm font-medium text-muted-foreground">Memeriksa ketersediaan jadwal...</p>
+                      </div>
                     ) : (
                       <div className="grid gap-3 sm:grid-cols-2">
                         {selectedDoctor.doctor_schedules.filter(s => s.is_active).sort((a, b) => a.day_of_week - b.day_of_week).map((sched, i) => {
                           const dateString = getNextDateForDay(sched.day_of_week);
-                          const dateObj = new Date(dateString);
-                          const formattedDate = dateObj.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
                           const isToday = dateString === getWIBDateString();
+                          const capKey = `${sched.id}_${dateString}`;
+                          const cap = scheduleCapacities[capKey];
+                          const totalMin = timeToMinutes(sched.end_time) - timeToMinutes(sched.start_time);
+                          const remainingMin = cap ? totalMin - cap.usedMinutes : totalMin;
+                          const isFull = cap ? remainingMin <= 0 : false;
 
                           return (
                             <button key={sched.id || i}
-                              onClick={() => { setSelectedDate({ day: sched.day_of_week, date: dateString }); setStep(3); }}
-                              className="group w-full text-left p-5 rounded-2xl border-2 border-border/60 bg-white hover:border-primary hover:shadow-md hover:shadow-primary/5 active:scale-[0.98] transition-all flex flex-col gap-2 relative overflow-hidden"
+                              onClick={() => handleSelectSchedule(sched, dateString)}
+                              className={cn(
+                                "group w-full text-left p-5 rounded-2xl border-2 transition-all flex flex-col gap-2 relative overflow-hidden",
+                                isFull
+                                  ? "border-red-200 bg-red-50/50 hover:border-red-300"
+                                  : "border-border/60 bg-white hover:border-primary hover:shadow-md hover:shadow-primary/5 active:scale-[0.98]"
+                              )}
                             >
-                              <div className="absolute right-0 top-0 w-20 h-20 bg-gradient-to-bl from-primary/5 to-transparent rounded-bl-full -mr-8 -mt-8 transition-transform group-hover:scale-110" />
+                              <div className={cn("absolute right-0 top-0 w-20 h-20 rounded-bl-full -mr-8 -mt-8 transition-transform group-hover:scale-110", isFull ? "bg-gradient-to-bl from-red-500/5 to-transparent" : "bg-gradient-to-bl from-primary/5 to-transparent")} />
 
                               <div className="flex items-center justify-between relative z-10">
-                                <span className="font-bold text-lg text-foreground group-hover:text-primary transition-colors">
+                                <span className={cn("font-bold text-lg transition-colors", isFull ? "text-muted-foreground" : "text-foreground group-hover:text-primary")}>
                                   Hari {DAYS[sched.day_of_week]}
                                 </span>
-                                {isToday && (
-                                  <Badge variant="secondary" className="bg-green-100 text-green-700 hover:bg-green-100 border-green-200 text-[10px] py-0 h-5">
-                                    Hari Ini
-                                  </Badge>
-                                )}
+                                <div className="flex items-center gap-1.5">
+                                  {isToday && !isFull && (
+                                    <Badge variant="secondary" className="bg-green-100 text-green-700 hover:bg-green-100 border-green-200 text-[10px] py-0 h-5">
+                                      Hari Ini
+                                    </Badge>
+                                  )}
+                                  {isFull && (
+                                    <Badge variant="secondary" className="bg-red-100 text-red-600 hover:bg-red-100 border-red-200 text-[10px] py-0 h-5 gap-1">
+                                      <AlertTriangle className="w-3 h-3" /> PENUH
+                                    </Badge>
+                                  )}
+                                </div>
                               </div>
                               <p className="text-sm text-muted-foreground relative z-10 flex items-center gap-1.5">
                                 <Clock className="w-3.5 h-3.5" />
                                 {sched.start_time.slice(0, 5)} - {sched.end_time.slice(0, 5)} WIB
                               </p>
+                              {cap && !isFull && (
+                                <p className="text-[11px] text-green-600 font-medium relative z-10">✓ Sisa waktu: ±{remainingMin} menit ({cap.queueCount} antrian)</p>
+                              )}
+                              {isFull && (
+                                <p className="text-[11px] text-red-500 font-medium relative z-10">Klik untuk daftar minggu depan →</p>
+                              )}
                             </button>
                           );
                         })}
@@ -443,7 +539,7 @@ export default function QueueSection() {
                         <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
                           📝 Lengkapi Data Anda
                         </h3>
-                        <p className="text-sm text-muted-foreground mt-1">Anda mendaftar ke <strong>{selectedDoctor?.name}</strong> untuk <strong>Hari {selectedDate ? DAYS[selectedDate.day] : ""}</strong>.</p>
+                        <p className="text-sm text-muted-foreground mt-1">Anda mendaftar ke <strong>{selectedDoctor?.name}</strong> untuk <strong>Hari {selectedDate ? DAYS[selectedDate.day] : ""} ({selectedDate?.start_time.slice(0, 5)} - {selectedDate?.end_time.slice(0, 5)})</strong>.</p>
                       </div>
                       <Button variant="ghost" size="sm" onClick={() => setStep(2)} className="text-xs h-8 gap-1.5 text-muted-foreground hover:text-foreground shrink-0">
                         <ArrowLeft className="w-3.5 h-3.5" /> Ganti Hari
