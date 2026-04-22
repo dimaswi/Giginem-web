@@ -233,9 +233,24 @@ export default function QueueSection() {
         totalMinutesBefore = (activeQueuesForEst as any[]).reduce((acc: number, q: any) => acc + (q.services?.duration || 0), 0);
       }
 
+      // Base time = max(now, schedule start time) — never estimate before practice opens
       const now = new Date();
-      const estTime = new Date(now.getTime() + totalMinutesBefore * 60000);
-      const formattedEstTime = estTime.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) + " WIB";
+      const todayStr = getWIBDateString();
+      let baseTime: Date;
+      if (queueDate === todayStr) {
+        // Today: use the later of now vs schedule start
+        const [sh, sm] = selectedDate.start_time.split(":").map(Number);
+        const schedStart = new Date(now);
+        schedStart.setHours(sh, sm, 0, 0);
+        baseTime = now > schedStart ? now : schedStart;
+      } else {
+        // Future date: always start from schedule start_time
+        const [sh, sm] = selectedDate.start_time.split(":").map(Number);
+        baseTime = new Date(queueDate + "T00:00:00+07:00");
+        baseTime.setHours(sh, sm, 0, 0);
+      }
+      const estTime = new Date(baseTime.getTime() + totalMinutesBefore * 60000);
+      const formattedEstTime = estTime.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" }) + " WIB";
 
       // Add a small random suffix to guarantee uniqueness even in extreme race conditions
       const randomSuffix = Math.random().toString(36).substring(2, 5).toUpperCase();

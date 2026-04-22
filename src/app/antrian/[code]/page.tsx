@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { CheckCircle2, Clock, XCircle, Users, Stethoscope, RefreshCcw } from "lucide-react";
 import Link from "next/link";
 import QRCode from "react-qr-code";
-import { cn } from "@/lib/utils";
+import { cn, getWIBDateString } from "@/lib/utils";
 
 interface PageProps {
   params: Promise<{ code: string }>;
@@ -47,15 +47,31 @@ export default async function QueueStatusPage({ params }: PageProps) {
 
   const aheadCount = aheadQueues?.length ?? 0;
 
-  // Calculate estimation: Now + sum of durations of people ahead
+  // Calculate estimation: base time + sum of durations of people ahead
   let totalMinutesAhead = 0;
   if (aheadQueues) {
     totalMinutesAhead = aheadQueues.reduce((acc: number, q: any) => acc + (q.services?.duration || 0), 0);
   }
 
+  // Base time = max(now, schedule start time) — never estimate before practice opens
   const now = new Date();
-  const estTime = new Date(now.getTime() + totalMinutesAhead * 60000);
-  const formattedEstTime = estTime.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) + " WIB";
+  const todayStr = getWIBDateString();
+  let baseTime: Date;
+  const schedStartTime = (queue as any).doctor_schedules?.start_time;
+  if (schedStartTime && queue.queue_date === todayStr) {
+    const [sh, sm] = schedStartTime.split(":").map(Number);
+    const schedStart = new Date(now);
+    schedStart.setHours(sh, sm, 0, 0);
+    baseTime = now > schedStart ? now : schedStart;
+  } else if (schedStartTime) {
+    const [sh, sm] = schedStartTime.split(":").map(Number);
+    baseTime = new Date(queue.queue_date + "T00:00:00+07:00");
+    baseTime.setHours(sh, sm, 0, 0);
+  } else {
+    baseTime = now;
+  }
+  const estTime = new Date(baseTime.getTime() + totalMinutesAhead * 60000);
+  const formattedEstTime = estTime.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" }) + " WIB";
 
   const statusConfig = STATUS_CONFIG[queue.status as keyof typeof STATUS_CONFIG];
   const StatusIcon = statusConfig.icon;
