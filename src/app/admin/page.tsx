@@ -127,7 +127,11 @@ export default function AdminQueuePage() {
       if (qToCancel) {
         // Fetch from DB to be safe
         const { data: dbQueue } = await (supabase.from("queues") as any).select("doctor_id, schedule_id, queue_date, queue_number").eq("id", id).single();
-        if (dbQueue) {
+        if (dbQueue && dbQueue.queue_number > 0) {
+           // 1. Clear current queue number (set to 0) to avoid duplicates after shifting
+           await (supabase.from("queues") as any).update({ queue_number: 0 }).eq("id", id);
+
+           // 2. Shift others: No = No - 1 where No > currentNo
            let subQuery = (supabase.from("queues") as any)
              .select("id, queue_number")
              .eq("doctor_id", dbQueue.doctor_id)

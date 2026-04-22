@@ -205,19 +205,18 @@ export default function QueueSection() {
         return;
       }
 
-      // Fetch ALL queues for this doctor/date to get the REAL next number
       const { data: allQueuesToday, error: qError } = await supabase.from("queues")
         .select("id")
         .eq("doctor_id", selectedDoctor.id)
         .eq("queue_date", queueDate)
-        .eq("schedule_id", selectedDate.schedule_id);
+        .eq("schedule_id", selectedDate.schedule_id)
+        .neq("status", "cancelled");
 
       if (qError) {
         console.error("Supabase Query Error:", qError);
         throw new Error(qError.message);
       }
 
-      // Separately fetch active queues for wait time estimation
       const { data: activeQueuesForEst } = await supabase.from("queues")
         .select("services(duration)")
         .eq("doctor_id", selectedDoctor.id)
@@ -227,32 +226,50 @@ export default function QueueSection() {
 
       const nextNumber = (allQueuesToday?.length ?? 0) + 1;
       
-      // Calculate estimation based on ACTIVE queues ahead
       let totalMinutesBefore = 0;
       if (activeQueuesForEst) {
         totalMinutesBefore = (activeQueuesForEst as any[]).reduce((acc: number, q: any) => acc + (q.services?.duration || 0), 0);
       }
 
-      // Base time = max(now, schedule start time) — never estimate before practice opens
       const now = new Date();
       const todayStr = getWIBDateString();
       let baseTime: Date;
       if (queueDate === todayStr) {
-        // Today: use the later of now vs schedule start
         const [sh, sm] = selectedDate.start_time.split(":").map(Number);
         const schedStart = new Date(now);
         schedStart.setHours(sh, sm, 0, 0);
         baseTime = now > schedStart ? now : schedStart;
       } else {
-        // Future date: always start from schedule start_time
         const [sh, sm] = selectedDate.start_time.split(":").map(Number);
         baseTime = new Date(queueDate + "T00:00:00+07:00");
         baseTime.setHours(sh, sm, 0, 0);
       }
+      
       const estTime = new Date(baseTime.getTime() + totalMinutesBefore * 60000);
+      const estFinishedTime = new Date(estTime.getTime() + serviceDuration * 60000);
+      
+      const [eh, em] = selectedDate.end_time.split(":").map(Number);
+      const schedEnd = new Date(baseTime);
+      schedEnd.setHours(eh, em, 0, 0);
+
+      if (estFinishedTime > schedEnd) {
+        const nextDate = new Date(queueDate + "T00:00:00+07:00");
+        nextDate.setDate(nextDate.getDate() + 7);
+        const nextDateStr = getWIBDateString(nextDate);
+        const dayLabel = new Date(nextDateStr + "T00:00:00+07:00").toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long" });
+        
+        toast.warning("Sesi Hari Ini Penuh", {
+          description: `Estimasi layanan selesai (${estFinishedTime.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}) melewati jam tutup. Anda dialihkan ke ${dayLabel}.`,
+          duration: 6000,
+        });
+        
+        setLoading(false);
+        setSelectedDate({ ...selectedDate, date: nextDateStr });
+        return;
+      }
+
       const formattedEstTime = estTime.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" }) + " WIB";
 
-      // Add a small random suffix to guarantee uniqueness even in extreme race conditions
       const randomSuffix = Math.random().toString(36).substring(2, 5).toUpperCase();
       const uniqueCode = `${selectedDoctor.id.slice(0, 4).toUpperCase()}-${queueDate.replace(/-/g, "")}-${String(nextNumber).padStart(3, "0")}-${randomSuffix}`;
       
