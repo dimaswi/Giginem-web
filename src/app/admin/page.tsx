@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 import { DeleteConfirmDialog } from "@/components/admin/DeleteConfirmDialog";
+import { getWIBDateString } from "@/lib/utils";
 
 const STATUS_CONFIG = {
   waiting:     { label: "Menunggu",  badge: "bg-amber-100 text-amber-700 border-amber-200",   dot: "bg-amber-500"   },
@@ -76,7 +77,7 @@ export default function AdminQueuePage() {
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split("T")[0]);
+  const [selectedDate, setSelectedDate] = useState(getWIBDateString());
   const [selectedDoctorFilter, setSelectedDoctorFilter] = useState("all");
   const [selectedStatusFilter, setSelectedStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
@@ -119,6 +120,26 @@ export default function AdminQueuePage() {
     const updateData: Record<string, string | null> = { status };
     if (status === "called") updateData.called_at = new Date().toISOString();
     if (status === "done") updateData.done_at = new Date().toISOString();
+
+    if (status === "cancelled") {
+      const qToCancel = queues.find((q) => q.id === id);
+      if (qToCancel) {
+        // Fetch from DB to be safe
+        const { data: dbQueue } = await (supabase.from("queues") as any).select("doctor_id, queue_date, queue_number").eq("id", id).single();
+        if (dbQueue) {
+           const { data: subs } = await (supabase.from("queues") as any)
+             .select("id, queue_number")
+             .eq("doctor_id", dbQueue.doctor_id)
+             .eq("queue_date", dbQueue.queue_date)
+             .gt("queue_number", dbQueue.queue_number);
+           if (subs) {
+             await Promise.all((subs as any[]).map(s => 
+               (supabase.from("queues") as any).update({ queue_number: s.queue_number - 1 }).eq("id", s.id)
+             ));
+           }
+        }
+      }
+    }
 
     const { error } = await (supabase.from("queues") as any).update(updateData).eq("id", id);
     if (error) toast.error("Gagal memperbarui status");

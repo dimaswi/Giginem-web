@@ -16,7 +16,7 @@ import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { CheckCircle2, ChevronRight, Loader2, QrCode, Copy, MapPin, User, Stethoscope, ArrowLeft, Clock } from "lucide-react";
 import QRCode from "react-qr-code";
-import { cn } from "@/lib/utils";
+import { cn, getWIBDateString, getWIBDay } from "@/lib/utils";
 
 const STEPS = ["Pilih Poli", "Pilih Dokter", "Pilih Hari", "Isi Data"];
 const DAYS = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
@@ -214,18 +214,18 @@ export default function QueueSection() {
   }
 
   const trackingUrl = ticket ? `${process.env.NEXT_PUBLIC_APP_URL || (typeof window !== "undefined" ? window.location.origin : "")}/antrian/${ticket.unique_code}` : "";
-  const todayDay = new Date().getDay();
+  const todayDay = getWIBDay();
 
   // Helper to calculate exact date for a given day_of_week
   function getNextDateForDay(targetDay: number) {
     const today = new Date();
-    const currentDay = today.getDay();
+    const currentDay = todayDay;
     let daysUntil = targetDay - currentDay;
     if (daysUntil < 0) daysUntil += 7; // Get next occurrence
 
     const targetDate = new Date(today);
     targetDate.setDate(today.getDate() + daysUntil);
-    return targetDate.toISOString().split("T")[0];
+    return getWIBDateString(targetDate);
   }
 
   return (
@@ -404,7 +404,7 @@ export default function QueueSection() {
                           const dateString = getNextDateForDay(sched.day_of_week);
                           const dateObj = new Date(dateString);
                           const formattedDate = dateObj.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
-                          const isToday = dateString === new Date().toISOString().split("T")[0];
+                          const isToday = dateString === getWIBDateString();
 
                           return (
                             <button key={sched.id || i}

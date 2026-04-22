@@ -5,6 +5,7 @@ import DoctorScheduleSection from "@/components/landing/DoctorScheduleSection";
 import QueueSection from "@/components/landing/QueueSection";
 import Footer from "@/components/landing/Footer";
 import WhatsAppFloating from "@/components/landing/WhatsAppFloating";
+import { getWIBDateString } from "@/lib/utils";
 
 export const revalidate = 60; // Revalidate every 60 seconds
 
@@ -22,7 +23,7 @@ export default async function HomePage() {
       supabase
         .from("queues")
         .select("*", { count: "exact", head: true })
-        .eq("queue_date", new Date().toISOString().split("T")[0])
+        .eq("queue_date", getWIBDateString())
         .neq("status", "cancelled"),
     ]);
 
