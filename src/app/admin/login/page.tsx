@@ -42,8 +42,12 @@ function LoginForm() {
       return;
     }
     toast.success("Login berhasil! Mengalihkan...");
-    router.push(redirectTo);
+    // Wait a moment for cookies to be fully set by supabase-ssr
+    await new Promise((resolve) => setTimeout(resolve, 500));
     router.refresh();
+    // Small delay to ensure the refresh propagates before push
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    router.push(redirectTo);
   }
 
   return (

@@ -6,11 +6,11 @@ export default async function proxy(request: NextRequest) {
 
   // Protect /admin routes (but not /admin/login)
   if (pathname.startsWith("/admin") && pathname !== "/admin/login") {
-    // Check for Supabase auth token in cookies
+    // Check for Supabase auth token in cookies (supports both single and chunked formats)
     const hasSession =
       request.cookies.getAll().some(
         (c) =>
-          c.name.startsWith("sb-") && c.name.endsWith("-auth-token") && c.value !== ""
+          (c.name.startsWith("sb-") && (c.name.endsWith("-auth-token") || c.name.includes("-auth-token."))) && c.value !== ""
       );
 
     if (!hasSession) {
