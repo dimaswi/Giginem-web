@@ -124,7 +124,7 @@ export default async function QueueStatusPage({ params }: PageProps) {
                 { label: "Poli", value: (queue as any).polyclinics?.name },
                 { label: "Jam Praktek", value: (queue as any).doctor_schedules ? `${(queue as any).doctor_schedules.start_time.slice(0, 5)} - ${(queue as any).doctor_schedules.end_time.slice(0, 5)} WIB` : "-" },
                 { label: "Estimasi Dilayani", value: queue.status === "waiting" ? formattedEstTime : "Sedang/Sudah Dilayani", bold: true },
-                { label: "Tanggal", value: new Date(queue.queue_date + "T00:00:00+07:00").toLocaleDateString("id-ID", { weekday: "long", year: "numeric", month: "long", day: "numeric" }) },
+                { label: "Tanggal", value: new Date(queue.queue_date + "T00:00:00+07:00").toLocaleDateString("id-ID", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "Asia/Jakarta" }) },
               ].map(({ label, value, bold }) => (
                 <div key={label} className="flex justify-between gap-2">
                   <span className="text-muted-foreground shrink-0">{label}</span>

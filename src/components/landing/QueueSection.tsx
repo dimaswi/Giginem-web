@@ -716,7 +716,7 @@ export default function QueueSection() {
                       { label: "Pasien", value: ticket.patient_name, bold: true },
                       { label: "Dokter", value: ticket.doctor_name },
                       { label: "Poli", value: ticket.polyclinic_name },
-                      { label: "Tanggal", value: new Date(ticket.queue_date).toLocaleDateString("id-ID", { weekday: "long", year: "numeric", month: "long", day: "numeric" }) },
+                      { label: "Tanggal", value: new Date(ticket.queue_date + "T00:00:00+07:00").toLocaleDateString("id-ID", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "Asia/Jakarta" }) },
                     ].map(({ label, value, bold }) => (
                       <div key={label} className="flex justify-between items-center gap-3">
                         <span className="text-[11px] text-muted-foreground uppercase tracking-wider font-semibold">{label}</span>
