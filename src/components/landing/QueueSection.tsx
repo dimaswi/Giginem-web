@@ -23,8 +23,8 @@ const DAYS = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
 
 interface Service { id: string; name: string; duration: number; polyclinic_id: string; }
 interface Polyclinic { id: string; name: string; description?: string | null; }
-interface Doctor { 
-  id: string; name: string; specialization: string; polyclinic_id: string; 
+interface Doctor {
+  id: string; name: string; specialization: string; polyclinic_id: string;
   doctor_schedules?: { id: string; day_of_week: number; start_time: string; end_time: string; max_patients: number; is_active: boolean; }[];
 }
 interface QueueTicket {
@@ -122,7 +122,7 @@ export default function QueueSection() {
       const nextDateStr = getWIBDateString(nextDate);
       const nextDayLabel = new Date(nextDateStr + "T00:00:00+07:00").toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
       toast.warning("⚠️ Jadwal Ini Sudah Penuh", {
-        description: `Kapasitas jadwal ${DAYS[sched.day_of_week]} (${sched.start_time.slice(0,5)}-${sched.end_time.slice(0,5)}) sudah penuh. Jadwal berikutnya tersedia pada ${nextDayLabel}.`,
+        description: `Kapasitas jadwal ${DAYS[sched.day_of_week]} (${sched.start_time.slice(0, 5)}-${sched.end_time.slice(0, 5)}) sudah penuh. Jadwal berikutnya tersedia pada ${nextDayLabel}.`,
         duration: 7000,
       });
       // Tetap set ke jadwal minggu depan dan lanjut ke step 3 dengan info
@@ -136,7 +136,7 @@ export default function QueueSection() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedDoctor || !selectedPoli || !selectedDate) return;
-    
+
     // Check if service is required (if any services exist for this poli)
     const poliServices = services.filter(s => s.polyclinic_id === selectedPoli.id);
     if (poliServices.length > 0 && !selectedService) {
@@ -211,13 +211,23 @@ export default function QueueSection() {
 
       // === STEP 3: Cek duplikat pendaftar ===
       const cleanName = form.name.trim().toLowerCase().replace(/\s+/g, ' ');
-      const cleanPhone = form.phone.replace(/\D/g, "").replace(/^0|^62/, "");
+      // Normalize phone: remove non-digits, then ensure it starts with 62
+      const phoneDigits = form.phone.replace(/\D/g, "");
+      const storedPhone = phoneDigits.startsWith("0") 
+        ? phoneDigits.replace(/^0/, "62") 
+        : phoneDigits.startsWith("62") 
+          ? phoneDigits 
+          : "62" + phoneDigits;
+      
+      // For duplicate check, use the part after 62 or 0
+      const phoneNational = phoneDigits.replace(/^0|^62/, "");
+
 
       const activeQueues = allQueues.filter(q => ["waiting", "called", "in_progress"].includes(q.status));
       const duplicate = activeQueues.find((q: any) => {
         const dbName = (q.patient_name || "").trim().toLowerCase().replace(/\s+/g, ' ');
         const dbPhone = (q.patient_phone || "").replace(/\D/g, "").replace(/^0|^62/, "");
-        return dbName === cleanName || (dbPhone && dbPhone === cleanPhone);
+        return dbName === cleanName || (dbPhone && dbPhone === phoneNational);
       });
 
       if (duplicate) {
@@ -233,7 +243,7 @@ export default function QueueSection() {
       // Gunakan MAX queue_number (termasuk cancelled) + 1, bukan count,
       // agar tidak konflik saat pasien yang cancel daftar ulang.
       const nextNumber = maxQueueNumber + 1;
-      
+
       // Estimasi waktu dilayani = jam buka praktek + total durasi antrian sebelumnya
       // (bukan dari waktu sekarang, agar konsisten)
       const formattedEstTime = newQueueEstStart.toLocaleTimeString("id-ID", {
@@ -243,21 +253,21 @@ export default function QueueSection() {
       // === STEP 5: Insert antrian baru ===
       const randomSuffix = Math.random().toString(36).substring(2, 5).toUpperCase();
       const uniqueCode = `${selectedDoctor.id.slice(0, 4).toUpperCase()}-${queueDate.replace(/-/g, "")}-${String(nextNumber).padStart(3, "0")}-${randomSuffix}`;
-      
+
       const { data, error: insertError } = await (supabase.from("queues") as any).insert({
-        doctor_id: selectedDoctor.id, 
+        doctor_id: selectedDoctor.id,
         schedule_id: selectedDate.schedule_id,
         polyclinic_id: selectedPoli.id,
         service_id: selectedService?.id || null,
-        patient_name: cleanName, 
-        patient_phone: cleanPhone,
+        patient_name: cleanName,
+        patient_phone: storedPhone,
         complaint: form.complaint.trim() || null,
-        queue_number: nextNumber, 
-        unique_code: uniqueCode, 
-        queue_date: queueDate, 
+        queue_number: nextNumber,
+        unique_code: uniqueCode,
+        queue_date: queueDate,
         status: "waiting",
       }).select().single();
-      
+
       if (insertError) {
         console.error("Supabase Insert Error:", insertError);
         throw new Error(insertError.message);
@@ -637,9 +647,9 @@ export default function QueueSection() {
                               <div className="h-10 px-4 flex items-center justify-center bg-white border-2 border-primary/20 rounded-xl font-bold text-lg text-primary shadow-sm select-none">
                                 {captcha.num1} + {captcha.num2} = ?
                               </div>
-                              <Input 
-                                type="number" 
-                                placeholder="Jawab" 
+                              <Input
+                                type="number"
+                                placeholder="Jawab"
                                 value={captchaInput}
                                 onChange={(e) => setCaptchaInput(e.target.value)}
                                 className="w-24 h-10 text-center font-bold text-lg rounded-xl border-2 border-primary focus-visible:ring-primary/20"

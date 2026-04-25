@@ -42,11 +42,11 @@ import { DeleteConfirmDialog } from "@/components/admin/DeleteConfirmDialog";
 import { getWIBDateString } from "@/lib/utils";
 
 const STATUS_CONFIG = {
-  waiting:     { label: "Menunggu",  badge: "bg-amber-100 text-amber-700 border-amber-200",   dot: "bg-amber-500"   },
-  called:      { label: "Dipanggil", badge: "bg-blue-100 text-blue-700 border-blue-200",       dot: "bg-blue-500"    },
-  in_progress: { label: "Diperiksa", badge: "bg-purple-100 text-purple-700 border-purple-200", dot: "bg-purple-500"  },
-  done:        { label: "Selesai",   badge: "bg-green-100 text-green-700 border-green-200",    dot: "bg-green-500"   },
-  cancelled:   { label: "Batal",     badge: "bg-slate-100 text-slate-500 border-slate-200",    dot: "bg-slate-400"   },
+  waiting: { label: "Menunggu", badge: "bg-amber-100 text-amber-700 border-amber-200", dot: "bg-amber-500" },
+  called: { label: "Dipanggil", badge: "bg-blue-100 text-blue-700 border-blue-200", dot: "bg-blue-500" },
+  in_progress: { label: "Diperiksa", badge: "bg-purple-100 text-purple-700 border-purple-200", dot: "bg-purple-500" },
+  done: { label: "Selesai", badge: "bg-green-100 text-green-700 border-green-200", dot: "bg-green-500" },
+  cancelled: { label: "Batal", badge: "bg-slate-100 text-slate-500 border-slate-200", dot: "bg-slate-400" },
 };
 
 type QueueStatus = keyof typeof STATUS_CONFIG;
@@ -128,22 +128,22 @@ export default function AdminQueuePage() {
         // Fetch from DB to be safe
         const { data: dbQueue } = await (supabase.from("queues") as any).select("doctor_id, schedule_id, queue_date, queue_number").eq("id", id).single();
         if (dbQueue && dbQueue.queue_number > 0) {
-           // 1. Clear current queue number (set to 0) to avoid duplicates after shifting
-           await (supabase.from("queues") as any).update({ queue_number: 0 }).eq("id", id);
+          // 1. Clear current queue number (set to 0) to avoid duplicates after shifting
+          await (supabase.from("queues") as any).update({ queue_number: 0 }).eq("id", id);
 
-           // 2. Shift others: No = No - 1 where No > currentNo
-           let subQuery = (supabase.from("queues") as any)
-             .select("id, queue_number")
-             .eq("doctor_id", dbQueue.doctor_id)
-             .eq("queue_date", dbQueue.queue_date)
-             .gt("queue_number", dbQueue.queue_number);
-           if (dbQueue.schedule_id) subQuery = subQuery.eq("schedule_id", dbQueue.schedule_id);
-           const { data: subs } = await subQuery;
-           if (subs) {
-             await Promise.all((subs as any[]).map(s => 
-               (supabase.from("queues") as any).update({ queue_number: s.queue_number - 1 }).eq("id", s.id)
-             ));
-           }
+          // 2. Shift others: No = No - 1 where No > currentNo
+          let subQuery = (supabase.from("queues") as any)
+            .select("id, queue_number")
+            .eq("doctor_id", dbQueue.doctor_id)
+            .eq("queue_date", dbQueue.queue_date)
+            .gt("queue_number", dbQueue.queue_number);
+          if (dbQueue.schedule_id) subQuery = subQuery.eq("schedule_id", dbQueue.schedule_id);
+          const { data: subs } = await subQuery;
+          if (subs) {
+            await Promise.all((subs as any[]).map(s =>
+              (supabase.from("queues") as any).update({ queue_number: s.queue_number - 1 }).eq("id", s.id)
+            ));
+          }
         }
       }
     }
@@ -159,7 +159,14 @@ export default function AdminQueuePage() {
   }
 
   function buildWAUrl(queue: Queue) {
-    const phone = queue.patient_phone.replace(/\D/g, "").replace(/^0/, "62");
+    const phoneDigits = queue.patient_phone.replace(/\D/g, "");
+    // Ensure it starts with 62. If it starts with 0, replace it. If it starts with 8, prepend 62.
+    const phone = phoneDigits.startsWith("62") 
+      ? phoneDigits 
+      : phoneDigits.startsWith("0") 
+        ? phoneDigits.replace(/^0/, "62") 
+        : "62" + phoneDigits;
+
     const msg = encodeURIComponent(
       `Halo *${queue.patient_name}*, antrian Anda di *${queue.polyclinics?.name}* ` +
       `dengan dokter *${queue.doctors?.name}* sudah mendekati giliran.\n\n` +
@@ -332,18 +339,16 @@ export default function AdminQueuePage() {
                           <MoreHorizontal className="w-4 h-4 text-muted-foreground" />
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-48 p-1.5 rounded-xl">
-                          <DropdownMenuItem
-                            render={
-                              <a
-                                href={buildWAUrl(queue)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="flex items-center gap-2.5 px-2.5 py-2 text-green-600 cursor-pointer rounded-lg"
-                              />
-                            }
-                          >
-                            <MessageCircle className="w-4 h-4" />
-                            <span className="text-sm font-medium">Hubungi via WA</span>
+                          <DropdownMenuItem asChild>
+                            <a
+                              href={buildWAUrl(queue)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-2.5 px-2.5 py-2 text-green-600 cursor-pointer rounded-lg w-full"
+                            >
+                              <MessageCircle className="w-4 h-4" />
+                              <span className="text-sm font-medium">Hubungi via WA</span>
+                            </a>
                           </DropdownMenuItem>
                           {queue.status === "waiting" && (
                             <DropdownMenuItem
