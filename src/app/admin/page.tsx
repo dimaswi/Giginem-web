@@ -161,10 +161,10 @@ export default function AdminQueuePage() {
   function buildWAUrl(queue: Queue) {
     const phoneDigits = queue.patient_phone.replace(/\D/g, "");
     // Ensure it starts with 62. If it starts with 0, replace it. If it starts with 8, prepend 62.
-    const phone = phoneDigits.startsWith("62") 
-      ? phoneDigits 
-      : phoneDigits.startsWith("0") 
-        ? phoneDigits.replace(/^0/, "62") 
+    const phone = phoneDigits.startsWith("62")
+      ? phoneDigits
+      : phoneDigits.startsWith("0")
+        ? phoneDigits.replace(/^0/, "62")
         : "62" + phoneDigits;
 
     const msg = encodeURIComponent(
@@ -339,7 +339,7 @@ export default function AdminQueuePage() {
                           <MoreHorizontal className="w-4 h-4 text-muted-foreground" />
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-48 p-1.5 rounded-xl">
-                          <DropdownMenuItem asChild>
+                          <DropdownMenuItem>
                             <a
                               href={buildWAUrl(queue)}
                               target="_blank"
