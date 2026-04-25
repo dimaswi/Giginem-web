@@ -96,11 +96,13 @@ export default function QueueSection() {
     const activeScheds = doctor.doctor_schedules.filter(s => s.is_active);
     await Promise.all(activeScheds.map(async (sched) => {
       const dateStr = getNextDateForDay(sched.day_of_week);
+      // Total kapasitas = selisih menit jam buka hingga jam tutup
       const totalMin = timeToMinutes(sched.end_time) - timeToMinutes(sched.start_time);
+      // Hitung semua antrian non-cancelled (termasuk done) untuk kapasitas
       const { data: queues } = await supabase.from("queues")
         .select("services(duration)")
         .eq("schedule_id", sched.id).eq("queue_date", dateStr).neq("status", "cancelled");
-      const usedMin = queues ? (queues as any[]).reduce((a: number, q: any) => a + (q.services?.duration || 0), 0) : 0;
+      const usedMin = queues ? (queues as any[]).reduce((a: number, q: any) => a + (q.services?.duration || 15), 0) : 0;
       caps[`${sched.id}_${dateStr}`] = { usedMinutes: usedMin, totalMinutes: totalMin, queueCount: queues?.length ?? 0 };
     }));
     setScheduleCapacities(caps);
@@ -114,14 +116,16 @@ export default function QueueSection() {
     const isFull = cap && cap.usedMinutes >= totalMin;
 
     if (isFull) {
-      // Find next week's date
+      // Jadwal penuh — tampilkan warning tapi jangan otomatis daftar, beri tahu user untuk pilih jadwal lain
       const nextDate = new Date(dateString + "T00:00:00+07:00");
       nextDate.setDate(nextDate.getDate() + 7);
       const nextDateStr = getWIBDateString(nextDate);
-      toast.info("Antrian Penuh", {
-        description: `Jadwal ini sudah penuh. Anda didaftarkan untuk ${new Date(nextDateStr + "T00:00:00+07:00").toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long" })}.`,
-        duration: 5000,
+      const nextDayLabel = new Date(nextDateStr + "T00:00:00+07:00").toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+      toast.warning("⚠️ Jadwal Ini Sudah Penuh", {
+        description: `Kapasitas jadwal ${DAYS[sched.day_of_week]} (${sched.start_time.slice(0,5)}-${sched.end_time.slice(0,5)}) sudah penuh. Jadwal berikutnya tersedia pada ${nextDayLabel}.`,
+        duration: 7000,
       });
+      // Tetap set ke jadwal minggu depan dan lanjut ke step 3 dengan info
       setSelectedDate({ day: sched.day_of_week, date: nextDateStr, schedule_id: sched.id, start_time: sched.start_time, end_time: sched.end_time });
     } else {
       setSelectedDate({ day: sched.day_of_week, date: dateString, schedule_id: sched.id, start_time: sched.start_time, end_time: sched.end_time });
@@ -151,125 +155,92 @@ export default function QueueSection() {
     }
     setLoading(true);
     try {
-      let queueDate = selectedDate.date;
-      
-      // 0. Capacity check: ensure the schedule is not full
-      const schedTotalMin = timeToMinutes(selectedDate.end_time) - timeToMinutes(selectedDate.start_time);
+      const queueDate = selectedDate.date;
       const serviceDuration = selectedService?.duration || 15;
-      const { data: capQueues } = await supabase.from("queues")
-        .select("services(duration)")
-        .eq("schedule_id", selectedDate.schedule_id).eq("queue_date", queueDate).neq("status", "cancelled");
-      const usedMin = capQueues ? (capQueues as any[]).reduce((a: number, q: any) => a + (q.services?.duration || 0), 0) : 0;
-      
-      if (usedMin + serviceDuration > schedTotalMin) {
-        // Auto-redirect to next week
-        const nextDate = new Date(queueDate + "T00:00:00+07:00");
-        nextDate.setDate(nextDate.getDate() + 7);
-        const nextDateStr = getWIBDateString(nextDate);
-        const dayLabel = new Date(nextDateStr + "T00:00:00+07:00").toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long" });
-        toast.warning("Antrian Hari Ini Penuh!", {
-          description: `Estimasi layanan melebihi jam tutup praktek. Anda akan didaftarkan untuk ${dayLabel}.`,
-          duration: 6000,
+
+      // === STEP 1: Ambil semua antrian non-cancelled untuk jadwal ini ===
+      // (digunakan untuk: cek kapasitas dan estimasi waktu)
+      const { data: allQueuesForSchedule, error: fetchAllError } = await supabase
+        .from("queues")
+        .select("id, patient_name, patient_phone, status, services(duration)")
+        .eq("schedule_id", selectedDate.schedule_id)
+        .eq("queue_date", queueDate)
+        .neq("status", "cancelled");
+
+      if (fetchAllError) throw new Error(fetchAllError.message);
+
+      const allQueues = (allQueuesForSchedule as any[]) ?? [];
+
+      // Ambil MAX queue_number dari SEMUA antrian hari ini (termasuk cancelled)
+      // agar pasien yang cancel bisa daftar ulang tanpa konflik nomor antrian
+      const { data: allQueuesIncCancelled } = await supabase
+        .from("queues")
+        .select("queue_number")
+        .eq("schedule_id", selectedDate.schedule_id)
+        .eq("queue_date", queueDate)
+        .order("queue_number", { ascending: false })
+        .limit(1);
+      const maxQueueNumber = (allQueuesIncCancelled as any[])?.[0]?.queue_number ?? 0;
+
+      // === STEP 2: Cek kapasitas jadwal ===
+      // Estimasi waktu SELALU dihitung dari jam buka praktek + total durasi semua antrian (non-cancelled)
+      // PENTING: .slice(0,5) karena Supabase mengembalikan time sebagai "HH:MM:SS",
+      // menambahkan ":00" langsung akan menghasilkan "T16:00:00:00+07:00" yang invalid.
+      const practiceStart = new Date(`${queueDate}T${selectedDate.start_time.slice(0, 5)}:00+07:00`);
+      const schedEnd = new Date(`${queueDate}T${selectedDate.end_time.slice(0, 5)}:00+07:00`);
+      const totalUsedMinutes = allQueues.reduce((acc: number, q: any) => acc + (q.services?.duration || 15), 0);
+      const newQueueEstStart = new Date(practiceStart.getTime() + totalUsedMinutes * 60000);
+      const newQueueEstEnd = new Date(newQueueEstStart.getTime() + serviceDuration * 60000);
+
+      if (newQueueEstEnd > schedEnd) {
+        // Jadwal penuh — estimasi waktu selesai melebihi jam tutup
+        const closingTime = schedEnd.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" });
+        const nextWeekDate = new Date(queueDate + "T00:00:00+07:00");
+        nextWeekDate.setDate(nextWeekDate.getDate() + 7);
+        const nextDayLabel = nextWeekDate.toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+        toast.warning("⚠️ Jadwal Sudah Penuh!", {
+          description: `Estimasi layanan melewati jam tutup praktek (${closingTime} WIB). Silakan pilih jadwal lain atau daftar ke jadwal berikutnya: ${nextDayLabel}.`,
+          duration: 8000,
         });
-        queueDate = nextDateStr;
-        setSelectedDate({ ...selectedDate, date: nextDateStr });
+        // Kembalikan ke step pilih hari agar user bisa pilih jadwal lain
+        setSelectedDate({ ...selectedDate, date: nextWeekDate.toISOString().slice(0, 10) });
+        setLoading(false);
+        setStep(2);
+        return;
       }
 
-      // 1. Normalize Input Data for Strict Comparison
+      // === STEP 3: Cek duplikat pendaftar ===
       const cleanName = form.name.trim().toLowerCase().replace(/\s+/g, ' ');
-      const cleanPhone = form.phone.replace(/\D/g, "").replace(/^0|^62/, ""); // Get core digits
+      const cleanPhone = form.phone.replace(/\D/g, "").replace(/^0|^62/, "");
 
-      // 2. Fetch all active queues for this doctor & day to check duplicates in JS
-      const { data: activeQueues, error: fetchError } = await supabase
-        .from("queues")
-        .select("patient_name, patient_phone, status, unique_code")
-        .eq("doctor_id", selectedDoctor.id)
-        .eq("queue_date", queueDate)
-        .eq("schedule_id", selectedDate.schedule_id)
-        .in("status", ["waiting", "called", "in_progress"]);
-
-      if (fetchError) console.error("Fetch Error:", fetchError);
-
-      const duplicate = (activeQueues as any[])?.find(q => {
-        const dbName = q.patient_name.trim().toLowerCase().replace(/\s+/g, ' ');
-        const dbPhone = q.patient_phone.replace(/\D/g, "").replace(/^0|^62/, "");
-        return dbName === cleanName || dbPhone === cleanPhone;
+      const activeQueues = allQueues.filter(q => ["waiting", "called", "in_progress"].includes(q.status));
+      const duplicate = activeQueues.find((q: any) => {
+        const dbName = (q.patient_name || "").trim().toLowerCase().replace(/\s+/g, ' ');
+        const dbPhone = (q.patient_phone || "").replace(/\D/g, "").replace(/^0|^62/, "");
+        return dbName === cleanName || (dbPhone && dbPhone === cleanPhone);
       });
 
       if (duplicate) {
         toast.error("Pendaftaran Gagal", {
-          description: `Data (Nama/Nomor WA) sudah terdaftar di antrian aktif dokter ini.`,
+          description: "Data (Nama/Nomor WA) sudah terdaftar di antrian aktif dokter ini.",
           duration: 5000,
         });
         setLoading(false);
         return;
       }
 
-      const { data: allQueuesToday, error: qError } = await supabase.from("queues")
-        .select("id")
-        .eq("doctor_id", selectedDoctor.id)
-        .eq("queue_date", queueDate)
-        .eq("schedule_id", selectedDate.schedule_id)
-        .neq("status", "cancelled");
-
-      if (qError) {
-        console.error("Supabase Query Error:", qError);
-        throw new Error(qError.message);
-      }
-
-      const { data: activeQueuesForEst } = await supabase.from("queues")
-        .select("services(duration)")
-        .eq("doctor_id", selectedDoctor.id)
-        .eq("queue_date", queueDate)
-        .eq("schedule_id", selectedDate.schedule_id)
-        .in("status", ["waiting", "called", "in_progress"]);
-
-      const nextNumber = (allQueuesToday?.length ?? 0) + 1;
+      // === STEP 4: Tentukan nomor antrian dan estimasi waktu ===
+      // Gunakan MAX queue_number (termasuk cancelled) + 1, bukan count,
+      // agar tidak konflik saat pasien yang cancel daftar ulang.
+      const nextNumber = maxQueueNumber + 1;
       
-      let totalMinutesBefore = 0;
-      if (activeQueuesForEst) {
-        totalMinutesBefore = (activeQueuesForEst as any[]).reduce((acc: number, q: any) => acc + (q.services?.duration || 0), 0);
-      }
+      // Estimasi waktu dilayani = jam buka praktek + total durasi antrian sebelumnya
+      // (bukan dari waktu sekarang, agar konsisten)
+      const formattedEstTime = newQueueEstStart.toLocaleTimeString("id-ID", {
+        hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta",
+      }) + " WIB";
 
-      const now = new Date();
-      const todayStr = getWIBDateString();
-      let baseTime: Date;
-      if (queueDate === todayStr) {
-        const [sh, sm] = selectedDate.start_time.split(":").map(Number);
-        const schedStart = new Date(now);
-        schedStart.setHours(sh, sm, 0, 0);
-        baseTime = now > schedStart ? now : schedStart;
-      } else {
-        const [sh, sm] = selectedDate.start_time.split(":").map(Number);
-        baseTime = new Date(queueDate + "T00:00:00+07:00");
-        baseTime.setHours(sh, sm, 0, 0);
-      }
-      
-      const estTime = new Date(baseTime.getTime() + totalMinutesBefore * 60000);
-      const estFinishedTime = new Date(estTime.getTime() + serviceDuration * 60000);
-      
-      const [eh, em] = selectedDate.end_time.split(":").map(Number);
-      const schedEnd = new Date(baseTime);
-      schedEnd.setHours(eh, em, 0, 0);
-
-      if (estFinishedTime > schedEnd) {
-        const nextDate = new Date(queueDate + "T00:00:00+07:00");
-        nextDate.setDate(nextDate.getDate() + 7);
-        const nextDateStr = getWIBDateString(nextDate);
-        const dayLabel = new Date(nextDateStr + "T00:00:00+07:00").toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long" });
-        
-        toast.warning("Sesi Hari Ini Penuh", {
-          description: `Estimasi layanan selesai (${estFinishedTime.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}) melewati jam tutup. Anda dialihkan ke ${dayLabel}.`,
-          duration: 6000,
-        });
-        
-        setLoading(false);
-        setSelectedDate({ ...selectedDate, date: nextDateStr });
-        return;
-      }
-
-      const formattedEstTime = estTime.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" }) + " WIB";
-
+      // === STEP 5: Insert antrian baru ===
       const randomSuffix = Math.random().toString(36).substring(2, 5).toUpperCase();
       const uniqueCode = `${selectedDoctor.id.slice(0, 4).toUpperCase()}-${queueDate.replace(/-/g, "")}-${String(nextNumber).padStart(3, "0")}-${randomSuffix}`;
       
@@ -571,12 +542,37 @@ export default function QueueSection() {
                         <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
                           📝 Lengkapi Data Anda
                         </h3>
-                        <p className="text-sm text-muted-foreground mt-1">Anda mendaftar ke <strong>{selectedDoctor?.name}</strong> untuk <strong>Hari {selectedDate ? DAYS[selectedDate.day] : ""} ({selectedDate?.start_time.slice(0, 5)} - {selectedDate?.end_time.slice(0, 5)})</strong>.</p>
+                        <p className="text-sm text-muted-foreground mt-1">
+                          Anda mendaftar ke <strong>{selectedDoctor?.name}</strong> untuk{" "}
+                          <strong>
+                            {selectedDate
+                              ? new Date(selectedDate.date + "T00:00:00+07:00").toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" })
+                              : ""}{" "}
+                            ({selectedDate?.start_time.slice(0, 5)} - {selectedDate?.end_time.slice(0, 5)} WIB)
+                          </strong>.
+                        </p>
                       </div>
                       <Button variant="ghost" size="sm" onClick={() => setStep(2)} className="text-xs h-8 gap-1.5 text-muted-foreground hover:text-foreground shrink-0">
                         <ArrowLeft className="w-3.5 h-3.5" /> Ganti Hari
                       </Button>
                     </div>
+
+                    {/* Banner peringatan jika antrian digeser ke minggu depan */}
+                    {selectedDate && selectedDate.date !== getNextDateForDay(selectedDate.day) && (
+                      <div className="flex items-start gap-3 p-4 rounded-2xl bg-amber-50 border-2 border-amber-200">
+                        <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                        <div className="flex flex-col gap-0.5">
+                          <p className="text-sm font-bold text-amber-800">Jadwal Minggu Ini Sudah Penuh</p>
+                          <p className="text-xs text-amber-700">
+                            Anda akan didaftarkan ke jadwal berikutnya:{" "}
+                            <strong>
+                              {new Date(selectedDate.date + "T00:00:00+07:00").toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+                            </strong>.
+                            Jika tidak ingin mendaftar ke jadwal ini, klik <strong>Ganti Hari</strong>.
+                          </p>
+                        </div>
+                      </div>
+                    )}
 
                     <form onSubmit={handleSubmit} className="flex flex-col gap-5">
                       <div className="grid gap-5 sm:grid-cols-2">

@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { CheckCircle2, Clock, XCircle, Users, Stethoscope, RefreshCcw } from "lucide-react";
 import Link from "next/link";
 import QRCode from "react-qr-code";
-import { cn, getWIBDateString } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 interface PageProps {
   params: Promise<{ code: string }>;
@@ -33,44 +33,40 @@ export default async function QueueStatusPage({ params }: PageProps) {
 
   if (!queue) return notFound();
 
-  // Get all people ahead who are NOT done or cancelled
+  // Ambil semua antrian di depan (semua status non-cancelled, termasuk done)
+  // agar estimasi konsisten dengan logika registrasi (berbasis jam buka praktek)
   let aheadQuery = supabase.from("queues")
-    .select("service_id, services(duration)")
+    .select("service_id, services(duration), status")
     .eq("doctor_id", queue.doctor_id)
     .eq("queue_date", queue.queue_date);
   
   if (queue.schedule_id) aheadQuery = aheadQuery.eq("schedule_id", queue.schedule_id);
 
   const { data: aheadQueues } = await aheadQuery
-    .in("status", ["waiting", "called", "in_progress"])
+    .neq("status", "cancelled")
     .lt("queue_number", queue.queue_number);
 
-  const aheadCount = aheadQueues?.length ?? 0;
+  // Hitung jumlah antrian aktif di depan (untuk tampilan)
+  const aheadCount = aheadQueues?.filter((q: any) => ["waiting", "called", "in_progress"].includes(q.status)).length ?? 0;
 
-  // Calculate estimation: base time + sum of durations of people ahead
-  let totalMinutesAhead = 0;
-  if (aheadQueues) {
-    totalMinutesAhead = aheadQueues.reduce((acc: number, q: any) => acc + (q.services?.duration || 0), 0);
-  }
+  // Estimasi SELALU dari jam buka praktek + total durasi semua antrian sebelumnya (non-cancelled)
+  // Ini konsisten dengan cara estimasi saat registrasi dilakukan
+  const totalMinutesAhead = (aheadQueues ?? []).reduce((acc: number, q: any) => acc + (q.services?.duration || 15), 0);
 
-  // Base time = max(now, schedule start time) — never estimate before practice opens
-  const now = new Date();
-  const todayStr = getWIBDateString();
-  let baseTime: Date;
   const schedStartTime = (queue as any).doctor_schedules?.start_time;
-  if (schedStartTime && queue.queue_date === todayStr) {
-    const [sh, sm] = schedStartTime.split(":").map(Number);
-    const schedStart = new Date(now);
-    schedStart.setHours(sh, sm, 0, 0);
-    baseTime = now > schedStart ? now : schedStart;
-  } else if (schedStartTime) {
-    const [sh, sm] = schedStartTime.split(":").map(Number);
-    baseTime = new Date(queue.queue_date + "T00:00:00+07:00");
-    baseTime.setHours(sh, sm, 0, 0);
+  let estTime: Date;
+
+  if (schedStartTime) {
+    // Estimasi = jam buka praktek + total durasi antrian di depan
+    // PENTING: .slice(0,5) karena Supabase mengembalikan time sebagai "HH:MM:SS"
+    // Tanpa slice, "T16:00:00:00+07:00" adalah string invalid → Date() = NaN
+    const practiceStart = new Date(`${queue.queue_date}T${schedStartTime.slice(0, 5)}:00+07:00`);
+    estTime = new Date(practiceStart.getTime() + totalMinutesAhead * 60000);
   } else {
-    baseTime = now;
+    // Fallback jika tidak ada jadwal: gunakan waktu sekarang
+    estTime = new Date(Date.now() + totalMinutesAhead * 60000);
   }
-  const estTime = new Date(baseTime.getTime() + totalMinutesAhead * 60000);
+
   const formattedEstTime = estTime.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" }) + " WIB";
 
   const statusConfig = STATUS_CONFIG[queue.status as keyof typeof STATUS_CONFIG];
